@@ -12,7 +12,7 @@ import {
 import { getDoc, setDoc, doc, serverTimestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { CollocationType, getCollocations } from "./CollocationData";
-import { playSound, speakTTS } from "./services/audioService";
+import { initAudio, playSound, speakTTS } from "./services/audioService";
 import { getNyangChefReaction } from "./services/geminiService";
 import {
   LogOut,
@@ -223,9 +223,11 @@ export default function App() {
     return result;
   };
 
-  // Global button click sound
+  // Global button click sound and audio init
   useEffect(() => {
-    const handleGlobalClick = (e: MouseEvent | TouchEvent) => {
+    const handleGlobalInteraction = (e: MouseEvent | TouchEvent) => {
+      initAudio();
+      
       // Button click sound
       const target = e.target as HTMLElement;
       if (
@@ -238,12 +240,12 @@ export default function App() {
       }
     };
     
-    document.addEventListener('click', handleGlobalClick);
-    document.addEventListener('touchstart', handleGlobalClick, { passive: true });
+    document.addEventListener('click', handleGlobalInteraction);
+    document.addEventListener('touchstart', handleGlobalInteraction, { passive: true });
     
     return () => {
-      document.removeEventListener('click', handleGlobalClick);
-      document.removeEventListener('touchstart', handleGlobalClick);
+      document.removeEventListener('click', handleGlobalInteraction);
+      document.removeEventListener('touchstart', handleGlobalInteraction);
     };
   }, []);
 

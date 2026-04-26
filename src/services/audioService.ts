@@ -2,6 +2,25 @@
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
+let hasInitializedAudio = false;
+
+export const initAudio = () => {
+  if (hasInitializedAudio) return;
+  hasInitializedAudio = true;
+  
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  
+  if ('speechSynthesis' in window) {
+    const utterance = new SpeechSynthesisUtterance(' ');
+    utterance.volume = 0.01;
+    utterance.rate = 10;
+    window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.resume();
+  }
+};
+
 export const playSound = (type: 'dragStart' | 'fusion' | 'wrong' | 'click' | 'cook') => {
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
