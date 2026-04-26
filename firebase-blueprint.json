@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user progress and profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The user's unique Firebase auth ID" },
+        "nickname": { "type": "string", "description": "User's display name" },
+        "level": { "type": "number", "description": "User's current level" },
+        "catnipCoins": { "type": "number", "description": "Currency for the game" },
+        "collectedRecipes": { "type": "array", "items": { "type": "string" }, "description": "List of collocations successfully solved" },
+        "email": { "type": "string", "description": "User's email handle" },
+        "createdAt": { "type": "object", "description": "Firestore server timestamp of creation" },
+        "updatedAt": { "type": "object", "description": "Firestore server timestamp of last update" }
+      },
+      "required": ["uid", "nickname", "level", "catnipCoins", "collectedRecipes", "email", "createdAt", "updatedAt"]
+    },
+    "Collocation": {
+      "title": "Collocation Problem",
+      "description": "Stores word pairs and distractors for the game.",
+      "type": "object",
+      "properties": {
+        "baseWord": { "type": "string", "description": "The base ingredient word" },
+        "correctSauce": { "type": "string", "description": "The correct matching word" },
+        "wrongSauces": { "type": "array", "items": { "type": "string" }, "description": "Distractor words" },
+        "description": { "type": "string", "description": "Explanation of the collocation" }
+      },
+      "required": ["baseWord", "correctSauce", "wrongSauces", "description"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user profiles."
+    },
+    "/collocations/{collocationId}": {
+      "schema": { "$ref": "#/entities/Collocation" },
+      "description": "Stores the collocation dictionaries/problems."
+    }
+  }
+}

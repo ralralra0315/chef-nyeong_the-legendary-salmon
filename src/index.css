@@ -1,0 +1,129 @@
+@font-face {
+  font-family: 'Yangjin';
+  src: url('https://cdn.jsdelivr.net/gh/supernovice-lab/font@0.9/yangjin.woff') format('woff');
+  font-weight: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'NanumSquareRound';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_two@1.0/NanumSquareRound.woff') format('woff');
+  font-weight: normal;
+  font-display: swap;
+}
+
+@import "tailwindcss";
+
+@theme {
+  --color-kitsch-pink: #FFA6C9;
+  --color-kitsch-blue: #90E0EF;
+  --color-kitsch-yellow: #FFF89A;
+  --color-kitsch-green: #B4F8C8;
+  --color-kitsch-purple: #DDBDF1;
+  --color-kitsch-black: #1E1E1E;
+}
+
+* {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+body {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' style='font-size: 24px;'><text y='24' opacity='0.9'>🔪</text></svg>") 0 0, auto !important;
+  font-family: 'NanumSquareRound', sans-serif;
+  background-color: #FAFAFA;
+  background-image: 
+    radial-gradient(var(--color-kitsch-blue) 1.5px, transparent 1.5px),
+    radial-gradient(var(--color-kitsch-pink) 1.5px, transparent 1.5px);
+  background-size: 40px 40px;
+  background-position: 0 0, 20px 20px;
+  margin: 0;
+  color: var(--color-kitsch-black);
+}
+
+button, a, [role="button"], input, select, textarea, .kitsch-button, .kitsch-button-sm {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' style='font-size: 24px;'><text y='24' opacity='0.9'>🐟</text></svg>") 0 0, pointer !important;
+}
+
+.font-yangjin {
+  font-family: 'Yangjin', sans-serif;
+}
+
+/* Kitsch UI Elements */
+.kitsch-border {
+  border: 2px solid var(--color-kitsch-black);
+  border-radius: 12px;
+  box-shadow: 2px 2px 0px var(--color-kitsch-black);
+  background-color: white;
+}
+
+.kitsch-border-full {
+  border: 2px solid var(--color-kitsch-black);
+  border-radius: 9999px;
+  box-shadow: 3px 3px 0px var(--color-kitsch-black);
+  background-color: white;
+}
+
+.kitsch-border-sm {
+  border: 2px solid var(--color-kitsch-black);
+  border-radius: 8px;
+  box-shadow: 2px 2px 0px var(--color-kitsch-black);
+  background-color: white;
+}
+
+.kitsch-button {
+  border: 2px solid var(--color-kitsch-black);
+  border-radius: 12px;
+  box-shadow: 3px 3px 0px var(--color-kitsch-black);
+  transition: all 0.1s ease;
+  cursor: pointer;
+}
+
+.kitsch-button:active {
+  transform: translate(3px, 3px);
+  box-shadow: 0px 0px 0px var(--color-kitsch-black);
+}
+
+.kitsch-button-sm {
+  border: 2px solid var(--color-kitsch-black);
+  border-radius: 8px;
+  box-shadow: 2px 2px 0px var(--color-kitsch-black);
+  transition: all 0.1s ease;
+  cursor: pointer;
+}
+
+.kitsch-button-sm:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0px 0px 0px var(--color-kitsch-black);
+}
+
+/* Background Patterns */
+.bg-grid {
+  background-size: 20px 20px;
+  background-image: linear-gradient(to right, #e5e7eb 1px, transparent 1px),
+    linear-gradient(to bottom, #e5e7eb 1px, transparent 1px);
+}
+
+.bg-stripes {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255,102,204,0.1),
+    rgba(255,102,204,0.1) 10px,
+    transparent 10px,
+    transparent 20px
+  );
+}
+
+/* Custom Scrollbar for Kitsch style */
+::-webkit-scrollbar {
+  width: 12px;
+}
+::-webkit-scrollbar-track {
+  background: white;
+  border-left: 2px solid var(--color-kitsch-black);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-kitsch-pink);
+  border: 2px solid var(--color-kitsch-black);
+  border-radius: 6px;
+}

@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isEmailVerified() { return request.auth.token.email_verified == true; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'nickname', 'level', 'salmons', 'collectedRecipes', 'wrongRecipes', 'purchasedItems', 'email', 'createdAt', 'updatedAt'])
+        && (!data.keys().hasAny(['furniturePositions']) || data.furniturePositions is map)
+        && (!data.keys().hasAny(['profileIcon']) || (data.profileIcon is string && data.profileIcon.size() <= 20))
+        && data.uid is string && data.uid.size() <= 128 && data.uid == request.auth.uid
+        && data.nickname is string && data.nickname.size() <= 50
+        && data.level is number
+        && data.salmons is number
+        && data.collectedRecipes is list && data.collectedRecipes.size() <= 1000
+        && data.wrongRecipes is list && data.wrongRecipes.size() <= 1000
+        && data.purchasedItems is list && data.purchasedItems.size() <= 1000
+        && data.email is string && data.email.size() <= 100
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidUserUpdate(data) {
+      return data.nickname is string && data.nickname.size() <= 50
+        && data.level is number
+        && data.salmons is number
+        && data.collectedRecipes is list && data.collectedRecipes.size() <= 1000
+        && data.wrongRecipes is list && data.wrongRecipes.size() <= 1000
+        && (!data.keys().hasAny(['purchasedItems']) || (data.purchasedItems is list && data.purchasedItems.size() <= 1000))
+        && (!data.keys().hasAny(['furniturePositions']) || data.furniturePositions is map)
+        && (!data.keys().hasAny(['profileIcon']) || (data.profileIcon is string && data.profileIcon.size() <= 20))
+        && data.updatedAt == request.time;
+    }
+
+    // Phase 4: Rules
+    match /users/{userId} {
+      // 0.2 No blanket reads
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId)
+                    && isValidId(userId)
+                    && isValidUser(incoming());
+
+      allow update: if isOwner(userId)
+                    && isValidId(userId)
+                    && isValidUserUpdate(incoming())
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'level', 'salmons', 'collectedRecipes', 'wrongRecipes', 'purchasedItems', 'furniturePositions', 'profileIcon', 'updatedAt'])
+                    && incoming().uid == existing().uid
+                    && incoming().email == existing().email
+                    && incoming().createdAt == existing().createdAt;
+
+      allow delete: if false;
+    }
+
+    match /collocations/{collocationId} {
+      // Allow any signed-in user to read collocation data
+      allow get: if isSignedIn();
+      // Enforce list query by not allowing list. Client should load by ID, or we can allow list if we want to fetch all.
+      // Wait, client needs to fetch a random one, or list a few.
+      // We will allow list for now but with a limit on sizes if possible, unfortunately we can't limit returned sizes in rules easily.
+      allow list: if isSignedIn();
+      allow write: if false; // Read-only for now, populated manually or via admin script
+    }
+  }
+}
