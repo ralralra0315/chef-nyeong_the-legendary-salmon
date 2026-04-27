@@ -10,7 +10,7 @@ import {
   OperationType,
 } from "./firebase";
 import Confetti from "react-confetti";
-import { getDoc, setDoc, doc, serverTimestamp, increment, onSnapshot } from "firebase/firestore";
+import { getDoc, setDoc, doc, serverTimestamp, increment, onSnapshot, collection, query, orderBy, limit, addDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { CollocationType, getCollocations } from "./CollocationData";
 import { initAudio, playSound, speakTTS } from "./services/audioService";
@@ -27,6 +27,7 @@ import {
   Share2,
   ScrollText,
   Fish,
+  Send,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -194,9 +195,26 @@ export default function App() {
   const [fishes, setFishes] = useState<{ id: number; word: string; x: number; y: number; angle: number }[]>([]);
   const [fishingResult, setFishingResult] = useState<{ isCorrect: boolean, clientX: number, clientY: number, fishId: number } | null>(null);
 
+  const [showMonsterFood, setShowMonsterFood] = useState(false);
+  const [isGoldenMode, setIsGoldenMode] = useState(false);
+  const [showGoldenConfetti, setShowGoldenConfetti] = useState(false);
+
   const [globalDishes, setGlobalDishes] = useState<number>(0);
   const [showGlobalQuestModal, setShowGlobalQuestModal] = useState(false);
   const GLOBAL_QUEST_TARGET = 10000;
+
+  // Chat States
+  interface ChatMessage {
+    id: string;
+    uid: string;
+    nickname: string;
+    level: number;
+    message: string;
+    createdAt: any;
+  }
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const AVAILABLE_ICONS = ["👩‍🍳", "👨‍🍳", "🧑‍🍳", "🐱", "🐶", "🐻", "🦊", "🐼", "🐸", "👽", "🤖", "👻", "🦄", "🍀", "🍎"];
 
@@ -223,6 +241,7 @@ export default function App() {
     if (collocations.length === 0) return;
     const randomProblem = collocations[Math.floor(Math.random() * collocations.length)];
     setFishingProblem(randomProblem);
+    setIsGoldenMode(Math.random() < 0.05);
 
     const verbs = [randomProblem.correctSauce, ...randomProblem.wrongSauces].sort(() => Math.random() - 0.5);
     const newFishes = verbs.map((word, i) => ({
@@ -264,13 +283,14 @@ export default function App() {
       }
     } else if (activeTab === "kitchen") {
       setChefReaction("어이 수습, 빨리 요리를 시작해라!");
+      setIsGoldenMode(Math.random() < 0.05);
     } else if (activeTab === "secretRecipe") {
       setChefReaction("비법 레시피를 복원해 보라냥! 5개 모두 맞혀야 한다냥!");
       if (secretProblems.length === 0) {
         initSecretRecipe();
       }
     }
-  }, [activeTab, fishingProblem, secretProblems.length, initFishingGame, initSecretRecipe]);
+  }, [activeTab, fishingProblem, secretProblems.length, initFishingGame, initSecretRecipe, currentIndex]);
 
   const handleFishClick = async (fish: typeof fishes[0], e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -294,11 +314,13 @@ export default function App() {
     setCatFaceStatus(isCorrect ? "success" : "fail");
 
     if (isCorrect) {
-      setChefReaction("싱싱한 놈으로 잘 잡았다냥! 아주 훌륭한 낚시꾼이다냥!");
-      speakTTS("싱싱한 놈으로 잘 잡았다냥!");
+      const earnedSalmons = isGoldenMode ? 50 : 10;
+      setChefReaction(isGoldenMode ? "럭키 드로우 터졌다냥! 특별 연어 50개 획득!" : "싱싱한 놈으로 잘 잡았다냥! 아주 훌륭한 낚시꾼이다냥!");
+      speakTTS(isGoldenMode ? "럭키 드로우 터졌다냥! 특별 연어 50개 획득!" : "싱싱한 놈으로 잘 잡았다냥!");
+      if (isGoldenMode) setShowGoldenConfetti(true);
       
       if (userProfile) {
-        const newSalmons = (userProfile.salmons || 0) + 10;
+        const newSalmons = (userProfile.salmons || 0) + earnedSalmons;
         const newLevel = getLevelInfo(newSalmons).level;
         try {
           await setDoc(doc(db, "users", userProfile.uid), {
@@ -314,16 +336,27 @@ export default function App() {
         setIsProcessing(false);
         setCatFaceStatus("idle");
         setFishingResult(null);
+        setShowGoldenConfetti(false);
         initFishingGame();
       }, 1500);
     } else {
-      setChefReaction("눈은 장식이냥?! 상한 생선을 잡으면 어떡하냥!");
-      speakTTS("눈은 장식이냥?! 상한 생선을 잡으면 어떡하냥!");
+      setChefReaction("이런 조합은 내 주방에선 음식물 쓰레기다냥! 당장 다시 만들어라냥!");
+      speakTTS("이런 조합은 내 주방에선 음식물 쓰레기다냥! 당장 다시 만들어라냥!");
+      setShowMonsterFood(true);
+      
+      let updatedWrong = [...(userProfile?.wrongRecipes || [])];
+      if (userProfile && !updatedWrong.includes(fishingProblem.id)) {
+        updatedWrong.push(fishingProblem.id);
+        setDoc(doc(db, "users", userProfile.uid), { wrongRecipes: updatedWrong, updatedAt: serverTimestamp() }, { merge: true }).catch(console.error);
+        setUserProfile({ ...userProfile, wrongRecipes: updatedWrong });
+      }
+
       setTimeout(() => {
         setIsProcessing(false);
         setCatFaceStatus("idle");
         setFishingResult(null);
-      }, 1500);
+        setShowMonsterFood(false);
+      }, 2500);
     }
   };
   const getChosung = (str: string) => {
@@ -441,8 +474,27 @@ export default function App() {
     }, (error) => {
       console.error("Global quest snapshot error:", error);
     });
-    return () => unsubGlobal();
+
+    const q = query(collection(db, "lounge_chats"), orderBy("createdAt", "asc"), limit(50));
+    const unsubChat = onSnapshot(q, (snapshot) => {
+      const msgs: ChatMessage[] = [];
+      snapshot.forEach(docSnap => {
+        msgs.push({ id: docSnap.id, ...docSnap.data() } as ChatMessage);
+      });
+      setChatMessages(msgs);
+    }, (error) => {
+      console.error("Chat snapshot error:", error);
+    });
+
+    return () => {
+      unsubGlobal();
+      unsubChat();
+    };
   }, [user, userProfile?.globalBonusReceived, GLOBAL_QUEST_TARGET]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
 
   const handleLogin = async () => {
     try {
@@ -454,6 +506,24 @@ export default function App() {
 
   const handleLogout = () => {
     signOut(auth);
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !user || !userProfile) return;
+    const msg = chatInput.trim();
+    setChatInput("");
+    try {
+      await addDoc(collection(db, "lounge_chats"), {
+        uid: userProfile.uid,
+        nickname: userProfile.nickname,
+        level: userProfile.level,
+        message: msg,
+        createdAt: serverTimestamp()
+      });
+    } catch (e) {
+      console.error("Chat send error:", e);
+    }
   };
 
   const handleSecretSubmit = async () => {
@@ -521,20 +591,21 @@ export default function App() {
       '제법 그럴싸한 요리를 내놓았구나!',
       '통과다, 다음 요리도 기대하겠다!'
     ];
-    const fallbackWrong = [
-      '이런 쓰레기를 내놓다니 제정신이냐!',
-      '내 혀가 고장 날 것 같구나! 다시 만들어오거라!',
-      '당장 다시 해오거라! 이딴 걸 요리라고!',
-      '재료가 아깝다! 도대체 무슨 짓을 한 거냐!'
-    ];
+    
     const reactionMsg = isCorrect 
-      ? fallbackCorrect[Math.floor(Math.random() * fallbackCorrect.length)]
-      : fallbackWrong[Math.floor(Math.random() * fallbackWrong.length)];
+      ? (isGoldenMode ? "럭키 드로우 터졌다냥! 특별 연어 50개 획득!" : fallbackCorrect[Math.floor(Math.random() * fallbackCorrect.length)])
+      : "이런 조합은 내 주방에선 음식물 쓰레기다냥! 당장 다시 만들어라냥!";
 
     setChefReaction(reactionMsg);
     speakTTS(reactionMsg);
+    
+    if (isCorrect && isGoldenMode) {
+      setShowGoldenConfetti(true);
+    } else if (!isCorrect) {
+      setShowMonsterFood(true);
+    }
 
-    const checkTime = 3000;
+    const checkTime = isCorrect && isGoldenMode ? 2500 : 3000;
 
     if (userProfile) {
       if (isCorrect) {
@@ -545,7 +616,8 @@ export default function App() {
         let updatedWrong = (userProfile.wrongRecipes || []).filter(
           (r) => r !== currentProblem.id,
         );
-        const newSalmons = (userProfile.salmons || 0) + 10;
+        const earnedSalmons = isGoldenMode ? 50 : 10;
+        const newSalmons = (userProfile.salmons || 0) + earnedSalmons;
         const newLevel = getLevelInfo(newSalmons).level;
 
         try {
@@ -595,6 +667,7 @@ export default function App() {
         setFusionState("idle");
         setCatFaceStatus("idle");
         setDraggedSauce(null);
+        setShowGoldenConfetti(false);
         setCurrentIndex((prev) =>
           collocations.length > 0 ? (prev + 1) % collocations.length : 0,
         );
@@ -605,6 +678,7 @@ export default function App() {
         setIsProcessing(false);
         setFusionState("idle");
         setCatFaceStatus("idle");
+        setShowMonsterFood(false);
         setDraggedSauce(null);
       }, checkTime);
     }
@@ -888,7 +962,7 @@ export default function App() {
             <div className="w-full max-w-[750px] bg-white kitsch-border-sm p-4 relative flex flex-col gap-2 shadow-sm">
               <div className="flex justify-between items-end">
                 <span className="font-yangjin text-[var(--color-kitsch-pink)] flex items-center gap-2">
-                  <span className="text-xl">🌟</span> 커뮤니티 누적 완성 요리
+                  <span className="text-xl">🌟</span> 냥셰프 연합 누적 완성 요리
                 </span>
                 <span className="font-yangjin text-sm text-gray-500">
                   {globalDishes.toLocaleString()} / {GLOBAL_QUEST_TARGET.toLocaleString()}
@@ -1022,12 +1096,14 @@ export default function App() {
                         className={cn(
                           "flex flex-col items-center justify-end pb-0 cursor-grab active:cursor-grabbing w-20 md:w-24 relative overflow-visible shrink-0 aspect-[1/1.5]",
                           isProcessing && "opacity-50 pointer-events-none",
+                          isGoldenMode && "drop-shadow-[0_0_15px_rgba(255,215,0,0.8)]"
                         )}
                       >
-                        <div className="w-6 h-6 absolute -top-4 bg-gradient-to-b from-red-500 to-red-400 rounded-t border-b-2 border-red-600 shadow-sm z-0 left-1/2 -translate-x-1/2"></div>
-                        <div className="w-16 h-24 md:w-20 md:h-28 bg-gradient-to-b from-white/80 to-gray-100 backdrop-blur-sm rounded-b-xl rounded-t-2xl shadow-[0_8px_16px_rgba(0,0,0,0.15),inset_2px_0_5px_rgba(255,255,255,0.8),inset_-2px_0_5px_rgba(0,0,0,0.1)] flex flex-col items-center justify-end relative z-10 transition-transform border border-gray-300 overflow-hidden shrink-0">
-                          <div className="w-full h-full absolute inset-0 bg-gradient-to-b from-red-500/10 to-transparent pointer-events-none"></div>
-                          <div className="w-14 md:w-16 h-10 md:h-12 mb-3 bg-white flex flex-col items-center justify-center text-[11px] md:text-[13px] border border-gray-200 shadow-[0_1px_3px_rgba(0,0,0,0.1)] rounded text-gray-800 z-20">
+                        {isGoldenMode && <div className="absolute inset-x-0 -top-8 -bottom-8 rounded-full bg-[radial-gradient(circle,rgba(255,215,0,0.6)_0%,rgba(255,215,0,0)_70%)] animate-pulse pointer-events-none" />}
+                        <div className={cn("w-6 h-6 absolute -top-4 rounded-t border-b-2 shadow-sm z-0 left-1/2 -translate-x-1/2", isGoldenMode ? "bg-gradient-to-b from-yellow-500 to-yellow-400 border-yellow-600" : "bg-gradient-to-b from-red-500 to-red-400 border-red-600")}></div>
+                        <div className={cn("w-16 h-24 md:w-20 md:h-28 backdrop-blur-sm rounded-b-xl rounded-t-2xl shadow-[0_8px_16px_rgba(0,0,0,0.15),inset_2px_0_5px_rgba(255,255,255,0.8),inset_-2px_0_5px_rgba(0,0,0,0.1)] flex flex-col items-center justify-end relative z-10 transition-transform border overflow-hidden shrink-0", isGoldenMode ? "bg-gradient-to-b from-yellow-200/90 to-yellow-100 border-yellow-400" : "bg-gradient-to-b from-white/80 to-gray-100 border-gray-300")}>
+                          <div className={cn("w-full h-full absolute inset-0 pointer-events-none", isGoldenMode ? "bg-gradient-to-b from-yellow-500/20 to-transparent" : "bg-gradient-to-b from-red-500/10 to-transparent")}></div>
+                          <div className={cn("w-14 md:w-16 h-10 md:h-12 mb-3 flex flex-col items-center justify-center text-[11px] md:text-[13px] border shadow-[0_1px_3px_rgba(0,0,0,0.1)] rounded z-20", isGoldenMode ? "bg-yellow-50 border-yellow-400 text-[#5C4033]" : "bg-white border-gray-200 text-gray-800")}>
                             <span className="font-yangjin leading-tight break-keep px-1 text-center font-bold relative z-10">
                               {sauce}
                             </span>
@@ -1136,20 +1212,21 @@ export default function App() {
                       style={{ position: 'absolute' }}
                     >
                     {/* SVG Graphic Salmon Card */}
-                    <div className="relative w-36 h-20 flex items-center justify-center transition-transform hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.8)] filter drop-shadow hover:brightness-110 object-contain">
+                    <div className={cn("relative w-36 h-20 flex items-center justify-center transition-transform filter drop-shadow object-contain", isGoldenMode ? "drop-shadow-[0_0_20px_rgba(255,215,0,0.8)] z-50 brightness-110" : "hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.8)] hover:brightness-110")}>
+                      {isGoldenMode && <div className="absolute inset-x-0 -top-8 -bottom-8 rounded-full bg-[radial-gradient(circle,rgba(255,215,0,0.6)_0%,rgba(255,215,0,0)_70%)] animate-pulse pointer-events-none" />}
                       <svg viewBox="0 0 120 60" className="absolute inset-0 w-full h-full drop-shadow-md z-0 pointer-events-none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M 35 30 L 0 5 L 8 30 L 0 55 Z" fill="#D84315" />
-                        <path d="M 30 30 L 0 10 Q 15 30 0 50 Z" fill="#FF8A65" stroke="#BF360C" strokeWidth="2" strokeLinejoin="round" />
-                        <path d="M 50 45 Q 65 65 75 42" fill="#FF8A65" stroke="#BF360C" strokeWidth="2" strokeLinecap="round" />
-                        <path d="M 50 15 Q 65 -5 80 18" fill="#FF8A65" stroke="#BF360C" strokeWidth="2" strokeLinecap="round" />
-                        <path d="M 25 30 Q 50 0 110 30 Q 50 60 25 30 Z" fill="#FFAB91" stroke="#BF360C" strokeWidth="2.5" />
-                        <path d="M 90 15 Q 85 30 90 45" fill="none" stroke="#D84315" strokeWidth="1.5" strokeLinecap="round" />
+                        <path d="M 35 30 L 0 5 L 8 30 L 0 55 Z" fill={isGoldenMode ? "#FFC107" : "#D84315"} />
+                        <path d="M 30 30 L 0 10 Q 15 30 0 50 Z" fill={isGoldenMode ? "#FFE082" : "#FF8A65"} stroke={isGoldenMode ? "#B28900" : "#BF360C"} strokeWidth="2" strokeLinejoin="round" />
+                        <path d="M 50 45 Q 65 65 75 42" fill={isGoldenMode ? "#FFE082" : "#FF8A65"} stroke={isGoldenMode ? "#B28900" : "#BF360C"} strokeWidth="2" strokeLinecap="round" />
+                        <path d="M 50 15 Q 65 -5 80 18" fill={isGoldenMode ? "#FFE082" : "#FF8A65"} stroke={isGoldenMode ? "#B28900" : "#BF360C"} strokeWidth="2" strokeLinecap="round" />
+                        <path d="M 25 30 Q 50 0 110 30 Q 50 60 25 30 Z" fill={isGoldenMode ? "#FFD54F" : "#FFAB91"} stroke={isGoldenMode ? "#B28900" : "#BF360C"} strokeWidth="2.5" />
+                        <path d="M 90 15 Q 85 30 90 45" fill="none" stroke={isGoldenMode ? "#FFC107" : "#D84315"} strokeWidth="1.5" strokeLinecap="round" />
                         <circle cx="95" cy="23" r="3.5" fill="#3E2723" />
                         <circle cx="96" cy="22" r="1" fill="#FFFFFF" />
                         <path d="M 103 32 Q 107 33 110 30" fill="none" stroke="#3E2723" strokeWidth="1" strokeLinecap="round" />
                       </svg>
                       {/* Fish Text */}
-                      <span className="font-yangjin text-[#4E342E] text-base md:text-lg z-10 break-keep text-center ml-2 relative top-0.5 max-w-[80px] leading-tight pointer-events-none">
+                      <span className={cn("font-yangjin text-base md:text-lg z-10 break-keep text-center ml-2 relative top-0.5 max-w-[80px] leading-tight pointer-events-none text-shadow-sm", isGoldenMode ? "text-[#5C4033] drop-shadow-md" : "text-[#4E342E]")}>
                         {fish.word}
                       </span>
                     </div>
@@ -1332,19 +1409,28 @@ export default function App() {
         {activeTab === "wrong" && (
           <main className="flex-1 p-6  w-full max-w-5xl mx-auto z-10 pb-32 min-h-0 bg-transparent flex flex-col">
             <h2
-              className="text-4xl font-yangjin mb-8 text-center text-[#8B5A2B] drop-shadow-sm shrink-0"
+              className="text-4xl font-yangjin mb-8 text-center text-red-700 drop-shadow-sm shrink-0 bg-black/80 inline-block px-8 py-3 rounded-xl border border-red-900 mx-auto"
             >
-              먼지 쌓인 오답 보관함
+              <span className="text-red-500 mr-2">접근 금지:</span> 괴식 도감
             </h2>
-            <div className="flex flex-col gap-6 w-full max-w-3xl mx-auto p-6 md:p-10 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] bg-[#C19A6B] rounded-2xl border-[16px] border-[#5E3A1A] shadow-[inset_0_20px_50px_rgba(0,0,0,0.4),0_20px_40px_rgba(0,0,0,0.2)] relative min-h-[350px]">
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 w-32 h-6 bg-[#3E2412] rounded-full shadow-[inset_0_-2px_5px_rgba(0,0,0,0.5)] flex justify-center z-10">
-                <div className="w-16 h-3 bg-gradient-to-b from-[#b87333] to-[#8a5322] rounded-full mt-1 shadow-sm"></div>
+            <div className="flex flex-col gap-6 w-full max-w-3xl mx-auto p-6 md:p-10 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] bg-[#2a2a2a] rounded-2xl border-[16px] border-[#1a1a1a] shadow-[inset_0_20px_50px_rgba(0,0,0,0.8),0_20px_40px_rgba(0,0,0,0.5)] relative min-h-[350px]">
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 w-32 h-6 bg-[#111] rounded-full shadow-[inset_0_-2px_5px_rgba(0,0,0,0.8)] flex justify-center z-10">
+                <div className="w-16 h-3 bg-gradient-to-b from-[#333] to-[#111] rounded-full mt-1 shadow-sm"></div>
               </div>
-              <div className="mt-8 flex flex-col gap-6 z-0 h-full">
+              
+              {/* Caution tape decoration */}
+              <div className="absolute -left-6 top-10 pointer-events-none -rotate-12 w-48 h-8 bg-yellow-400 border-y-2 border-black flex items-center shadow-lg truncate z-20">
+                <span className="font-black text-black tracking-widest px-2 mix-blend-multiply">CAUTION CAUTION</span>
+              </div>
+              <div className="absolute -right-6 bottom-10 pointer-events-none -rotate-12 w-48 h-8 bg-yellow-400 border-y-2 border-black flex items-center shadow-lg truncate z-20">
+                <span className="font-black text-black tracking-widest px-2 mix-blend-multiply">CAUTION CAUTION</span>
+              </div>
+
+              <div className="mt-8 flex flex-col gap-6 z-0 h-full relative">
               {!(userProfile?.wrongRecipes?.length > 0) ? (
-                <div className="text-center mt-12 text-2xl font-yangjin text-[#5E3A1A] flex flex-col items-center justify-center h-full drop-shadow-[0_1px_1px_rgba(255,255,255,0.4)]">
-                  <span className="text-6xl mb-4 opacity-80 mix-blend-multiply">🕷️</span>
-                  <p>서랍이 텅 비었어요!<br />먼지만 굴러다니네요...</p>
+                <div className="text-center mt-12 text-2xl font-yangjin text-gray-400 flex flex-col items-center justify-center h-full drop-shadow-md">
+                  <span className="text-6xl mb-4 opacity-90 drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">✨</span>
+                  <p className="text-gray-300">주방이 깨끗합니다!<br />아직 괴식이 하나도 없네요.</p>
                 </div>
               ) : (
                 (userProfile?.wrongRecipes || []).map((id) => {
@@ -1355,34 +1441,45 @@ export default function App() {
                   return (
                     <div
                       key={col.id}
-                      className="p-6 bg-[#FFFDF0] rounded-sm p-6 relative hover:-translate-y-2 transition-transform shadow-[2px_4px_10px_rgba(0,0,0,0.2),inset_0_0_20px_rgba(212,163,115,0.1)] border border-[#E6D5B8] before:content-[''] before:absolute before:inset-0 before:bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] before:opacity-50 before:pointer-events-none"
+                      className="p-6 bg-[#222] rounded-lg relative hover:-translate-y-2 transition-transform shadow-[2px_4px_10px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(255,0,0,0.05)] border border-red-900/50 flex flex-col md:flex-row items-center gap-6 group overflow-hidden"
                     >
-                      <h3 className="text-2xl font-yangjin mb-3 text-[#5A3A1B]">
-                        {col.baseWord}{" "}
-                        <span className="text-[#8B5A2B] decoration-wavy underline">
-                          ???
-                        </span>
-                      </h3>
-                      <div className="bg-white/80 p-3 kitsch-border-sm border-[#D4A373] mb-4">
-                        <p className="font-bold text-sm text-[#8B5A2B]">
-                          정답: {col.baseWord} {col.correctSauce}
-                        </p>
-                        <p className="text-base mt-2 text-[#5A3A1B]">{col.description}</p>
+                      <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-10 pointer-events-none group-hover:opacity-20 transition-opacity"></div>
+                      
+                      <div className="w-24 h-24 shrink-0 bg-black/50 rounded-full border border-red-800/50 flex items-center justify-center text-5xl shadow-[inset_0_0_15px_rgba(0,0,0,0.8)] filter grayscale-[0.5] contrast-125 relative">
+                        <div className="absolute inset-0 bg-red-900/20 rounded-full animate-pulse blur-sm"></div>
+                        <span className="relative z-10 animate-[bounce_3s_infinite]">🤮</span>
                       </div>
-                      <button
-                        onClick={() => {
-                          const idx = collocations.findIndex(
-                            (c) => c.id === id,
-                          );
-                          if (idx !== -1) {
-                            setCurrentIndex(idx);
-                            setActiveTab("kitchen");
-                          }
-                        }}
-                        className="kitsch-button bg-[#f0f0f0] text-black px-6 py-2 kitsch-border-sm font-yangjin text-lg w-full"
-                      >
-                        다시 도전하기
-                      </button>
+                      
+                      <div className="flex-1 text-center md:text-left z-10 w-full">
+                        <h3 className="text-xl md:text-2xl font-yangjin mb-2 text-gray-300">
+                          {col.baseWord}{" "}
+                          <span className="text-red-500 decoration-wavy underline opacity-80">
+                            ???
+                          </span>
+                        </h3>
+                        <p className="text-sm font-bold text-gray-400 mb-3 bg-black/60 p-2 rounded border border-gray-700/50 font-body">
+                          {col.description}
+                        </p>
+                        <div className="bg-green-900/20 p-3 rounded border border-green-900/50 shadow-inner mb-4">
+                          <p className="font-bold text-sm text-green-500 font-yangjin">
+                            올바른 조리법: {col.baseWord} {col.correctSauce}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const idx = collocations.findIndex(
+                              (c) => c.id === id,
+                            );
+                            if (idx !== -1) {
+                              setCurrentIndex(idx);
+                              setActiveTab("kitchen");
+                            }
+                          }}
+                          className="w-full md:w-auto bg-red-900/80 hover:bg-red-800 text-white px-6 py-2 rounded-lg border border-red-700 shadow-md font-yangjin text-lg transition-colors cursor-pointer"
+                        >
+                          다시 도전하기
+                        </button>
+                      </div>
                     </div>
                   );
                 })
@@ -1475,7 +1572,7 @@ export default function App() {
             </div>
 
             {/* Shop */}
-            <h3 className="text-2xl font-yangjin mb-4 text-black">가구 상점</h3>
+            <h3 className="text-2xl font-yangjin mb-4 text-black">특별 주방용품 & 식자재 상점</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {LOUNGE_SHOP_ITEMS.map((item) => {
                 const isBought = userProfile?.purchasedItems?.includes(item.id);
@@ -1511,6 +1608,55 @@ export default function App() {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Global Chat / 수습 셰프 단톡방 */}
+            <div className="w-full mt-12 bg-[#fbf4e6] bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] kitsch-border p-4 md:p-6 shadow-md relative flex flex-col h-[500px]">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-32 h-8 bg-[#D2B48C] rotate-1 shadow-sm border-2 border-[rgba(0,0,0,0.1)] opacity-80 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] z-10" />
+              <h3 className="font-yangjin text-[var(--color-kitsch-pink)] text-xl border-b-2 border-dashed border-[#D2B48C] pb-2 shrink-0 flex items-center justify-between">
+                <span>💬 수습 셰프 단톡방</span>
+                <span className="text-xs text-gray-500 hidden md:inline">단톡방에선 서로 예의를 지켜주시라냥!</span>
+              </h3>
+              
+              <div className="flex-1 overflow-y-auto mt-4 space-y-3 pr-2 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+                {chatMessages.length === 0 ? (
+                  <div className="text-center text-gray-400 mt-10 font-body text-sm">아직 아무도 말이 없다냥...</div>
+                ) : (
+                  chatMessages.map(msg => (
+                    <div key={msg.id} className={`flex flex-col ${msg.uid === user?.uid ? 'items-end' : 'items-start'} shrink-0 mb-3`}>
+                      <div className="flex items-baseline space-x-1 text-[11px] mb-1">
+                        <span className="font-yangjin bg-[#FFD700] px-1.5 py-0.5 rounded-sm text-gray-800 shrink-0 shadow-[1px_1px_0_rgba(0,0,0,0.2)] border border-yellow-600">
+                          {LEVEL_TITLES[msg.level - 1]?.title || '수습 셰프'}
+                        </span>
+                        <span className="font-bold shrink-0">{msg.nickname}</span>
+                      </div>
+                      <div className={`px-3 py-2 rounded-2xl max-w-[85%] sm:max-w-[75%] border-2 border-black/80 font-body text-sm leading-relaxed ${msg.uid === user?.uid ? 'bg-white rounded-tr-sm' : 'bg-[#e0f4ff] rounded-tl-sm'}`} style={{ wordBreak: 'keep-all' }}>
+                        {msg.message}
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              
+              <form onSubmit={handleSendMessage} className="mt-4 flex gap-2 shrink-0 relative p-2 md:p-0">
+                <input 
+                  type="text" 
+                  value={chatInput} 
+                  onChange={e => setChatInput(e.target.value)} 
+                  className="flex-1 p-3 border-2 border-black/80 rounded-xl outline-none focus:ring-4 focus:ring-[var(--color-kitsch-pink)]/30 bg-white font-body text-base" 
+                  placeholder="메시지를 입력하세요냥..." 
+                  maxLength={500}
+                />
+                <button 
+                  type="submit" 
+                  disabled={!chatInput.trim()}
+                  className="border-2 border-black/80 bg-[var(--color-kitsch-pink)] hover:bg-[#ff8da1] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-5 rounded-xl shrink-0 flex items-center justify-center transition-colors shadow-[2px_2px_0_rgba(0,0,0,0.8)] active:shadow-[0_0_0_rgba(0,0,0,0.8)] active:translate-y-[2px] active:translate-x-[2px]"
+                >
+                  <Send size={20} className="md:mr-1" />
+                  <span className="hidden md:inline font-yangjin">게시</span>
+                </button>
+              </form>
             </div>
           </main>
         )}
@@ -1791,7 +1937,7 @@ export default function App() {
             { id: "kitchen", icon: <Utensils size={20} />, label: "주방" },
             { id: "secretRecipe", icon: <ScrollText size={20} />, label: "비법" },
             { id: "encyclopedia", icon: <BookOpen size={20} />, label: "신선고" },
-            { id: "wrong", icon: <XCircle size={20} />, label: "보관함" },
+            { id: "wrong", icon: <XCircle size={20} />, label: "괴식 도감" },
             { id: "lounge", icon: <Home size={20} />, label: "라운지" },
             { id: "profile", icon: <User size={20} />, label: "내 정보" },
           ].map((tab) => (
@@ -1861,6 +2007,39 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {showMonsterFood && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
+            className="fixed inset-0 z-[200] flex items-center justify-center pointer-events-none"
+          >
+            <div className="absolute inset-0 bg-black/50 backdrop-contrast-150"></div>
+            <motion.div 
+              initial={{ scale: 0, opacity: 0, rotate: -20 }} 
+              animate={{ scale: 1.2, opacity: 1, rotate: 0 }} 
+              exit={{ scale: 0, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 200, damping: 10 }}
+              className="relative z-10 flex flex-col items-center drop-shadow-[0_0_30px_rgba(40,40,40,0.9)]"
+            >
+              <div className="text-8xl md:text-[120px] filter saturate-200 contrast-150 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] mix-blend-hard-light animate-pulse">
+                🤮
+              </div>
+              <div className="absolute -inset-20 bg-[radial-gradient(ellipse,rgba(50,50,50,0.8)_0%,transparent_70%)] -z-10 animate-ping"></div>
+              <span className="font-yangjin text-red-500 text-3xl md:text-5xl mt-6 font-black drop-shadow-[0_3px_5px_rgba(0,0,0,1)] bg-black/40 px-6 py-2 rounded-lg border-2 border-red-700 uppercase tracking-widest relative">
+                <span className="absolute -inset-1 blur-sm text-red-600 z-[-1]">괴식 탄생!</span>
+                괴식 탄생!
+              </span>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      
+      {showGoldenConfetti && (
+        <div className="fixed inset-0 z-[150] pointer-events-none">
+          <Confetti width={typeof window !== 'undefined' ? window.innerWidth : 800} height={typeof window !== 'undefined' ? window.innerHeight : 600} recycle={false} numberOfPieces={300} colors={['#FFD700', '#FFA500', '#FF8C00', '#FDF5E6', '#FFF8DC']} />
+        </div>
+      )}
       </div>
     </>
   );
