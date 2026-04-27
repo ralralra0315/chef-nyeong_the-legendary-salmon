@@ -39,7 +39,8 @@ service cloud.firestore {
         && (!data.keys().hasAny(['purchasedItems']) || (data.purchasedItems is list && data.purchasedItems.size() <= 1000))
         && (!data.keys().hasAny(['furniturePositions']) || data.furniturePositions is map)
         && (!data.keys().hasAny(['profileIcon']) || (data.profileIcon is string && data.profileIcon.size() <= 20))
-        && data.updatedAt == request.time;
+        && (!data.keys().hasAny(['globalBonusReceived']) || data.globalBonusReceived is bool)
+        && (!data.keys().hasAny(['updatedAt']) || data.updatedAt == request.time);
     }
 
     // Phase 4: Rules
@@ -55,12 +56,19 @@ service cloud.firestore {
       allow update: if isOwner(userId)
                     && isValidId(userId)
                     && isValidUserUpdate(incoming())
-                    && incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'level', 'salmons', 'collectedRecipes', 'wrongRecipes', 'purchasedItems', 'furniturePositions', 'profileIcon', 'updatedAt'])
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'level', 'salmons', 'collectedRecipes', 'wrongRecipes', 'purchasedItems', 'furniturePositions', 'profileIcon', 'globalBonusReceived', 'updatedAt'])
                     && incoming().uid == existing().uid
                     && incoming().email == existing().email
                     && incoming().createdAt == existing().createdAt;
 
       allow delete: if false;
+    }
+
+    match /global_quests/{questId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['total_dishes']);
     }
 
     match /collocations/{collocationId} {

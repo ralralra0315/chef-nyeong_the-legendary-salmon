@@ -9,7 +9,8 @@ import {
   handleFirestoreError,
   OperationType,
 } from "./firebase";
-import { getDoc, setDoc, doc, serverTimestamp } from "firebase/firestore";
+import Confetti from "react-confetti";
+import { getDoc, setDoc, doc, serverTimestamp, increment, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { CollocationType, getCollocations } from "./CollocationData";
 import { initAudio, playSound, speakTTS } from "./services/audioService";
@@ -25,6 +26,7 @@ import {
   Camera,
   Share2,
   ScrollText,
+  Fish,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -78,6 +80,7 @@ interface UserProfile {
   purchasedItems: string[];
   furniturePositions?: Record<string, { x: number; y: number }>;
   profileIcon?: string;
+  globalBonusReceived?: boolean;
 }
 
 const LEVEL_TITLES = [
@@ -172,8 +175,8 @@ export default function App() {
   const [fusionState, setFusionState] = useState<"idle" | "processing" | "success" | "fail">("idle");
   const [catFaceStatus, setCatFaceStatus] = useState<"idle" | "waiting" | "success" | "fail">("idle");
   const [activeTab, setActiveTab] = useState<
-    "kitchen" | "encyclopedia" | "lounge" | "wrong" | "profile" | "secretRecipe"
-  >("kitchen");
+    "kitchen" | "fishing" | "encyclopedia" | "lounge" | "wrong" | "profile" | "secretRecipe"
+  >("fishing");
 
   const captureRef = useRef<HTMLDivElement>(null);
   const [editNickname, setEditNickname] = useState("");
@@ -187,6 +190,13 @@ export default function App() {
   const [secretWrongIndices, setSecretWrongIndices] = useState<number[]>([]);
   const [hasFailedSecretOnce, setHasFailedSecretOnce] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
+  const [fishingProblem, setFishingProblem] = useState<CollocationType | null>(null);
+  const [fishes, setFishes] = useState<{ id: number; word: string; x: number; y: number; angle: number }[]>([]);
+  const [fishingResult, setFishingResult] = useState<{ isCorrect: boolean, clientX: number, clientY: number, fishId: number } | null>(null);
+
+  const [globalDishes, setGlobalDishes] = useState<number>(0);
+  const [showGlobalQuestModal, setShowGlobalQuestModal] = useState(false);
+  const GLOBAL_QUEST_TARGET = 10000;
 
   const AVAILABLE_ICONS = ["👩‍🍳", "👨‍🍳", "🧑‍🍳", "🐱", "🐶", "🐻", "🦊", "🐼", "🐸", "👽", "🤖", "👻", "🦄", "🍀", "🍎"];
 
@@ -208,7 +218,114 @@ export default function App() {
     }
   };
 
-  // Helper for Chosung
+  // Mini-game fishing logic
+  const initFishingGame = useCallback(() => {
+    if (collocations.length === 0) return;
+    const randomProblem = collocations[Math.floor(Math.random() * collocations.length)];
+    setFishingProblem(randomProblem);
+
+    const verbs = [randomProblem.correctSauce, ...randomProblem.wrongSauces].sort(() => Math.random() - 0.5);
+    const newFishes = verbs.map((word, i) => ({
+      id: i,
+      word,
+      x: Math.random() * 80 + 10,
+      y: Math.random() * 60 + 20,
+      angle: (Math.random() * 30) - 15,
+    }));
+    setFishes(newFishes);
+  }, [collocations]);
+
+  const initSecretRecipe = useCallback(() => {
+    if (collocations.length === 0) return;
+    const byCat = collocations.reduce((acc, curr) => {
+      acc[curr.category] = acc[curr.category] || [];
+      acc[curr.category].push(curr);
+      return acc;
+    }, {} as Record<string, CollocationType[]>);
+    
+    const validCats = Object.keys(byCat).filter(k => byCat[k].length >= 5);
+    const selectedCat = validCats[Math.floor(Math.random() * validCats.length)] || Object.keys(byCat)[0];
+    const pool = validCats.length > 0 ? byCat[selectedCat] : collocations;
+    
+    // shuffle array
+    const shuffled = [...pool].sort(() => 0.5 - Math.random());
+    setSecretProblems(shuffled.slice(0, 5));
+    setSecretAnswers(['', '', '', '', '']);
+    setSecretWrongIndices([]);
+    setHasFailedSecretOnce(false);
+    setShowSecretModal(false);
+  }, [collocations]);
+
+  useEffect(() => {
+    if (activeTab === "fishing") {
+      setChefReaction("어휘 낚시터에 온 걸 환영한다냥! 싱싱한 단어를 낚아 올리라냥!");
+      if (!fishingProblem) {
+        initFishingGame();
+      }
+    } else if (activeTab === "kitchen") {
+      setChefReaction("어이 수습, 빨리 요리를 시작해라!");
+    } else if (activeTab === "secretRecipe") {
+      setChefReaction("비법 레시피를 복원해 보라냥! 5개 모두 맞혀야 한다냥!");
+      if (secretProblems.length === 0) {
+        initSecretRecipe();
+      }
+    }
+  }, [activeTab, fishingProblem, secretProblems.length, initFishingGame, initSecretRecipe]);
+
+  const handleFishClick = async (fish: typeof fishes[0], e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    if (!fishingProblem || isProcessing) return;
+    setIsProcessing(true);
+    
+    let clientX = 0;
+    let clientY = 0;
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = (e as React.MouseEvent).clientX;
+      clientY = (e as React.MouseEvent).clientY;
+    }
+
+    const isCorrect = fish.word === fishingProblem.correctSauce;
+    setFishingResult({ isCorrect, clientX, clientY, fishId: fish.id });
+
+    playSound(isCorrect ? "fusion" : "wrong");
+    setCatFaceStatus(isCorrect ? "success" : "fail");
+
+    if (isCorrect) {
+      setChefReaction("싱싱한 놈으로 잘 잡았다냥! 아주 훌륭한 낚시꾼이다냥!");
+      speakTTS("싱싱한 놈으로 잘 잡았다냥!");
+      
+      if (userProfile) {
+        const newSalmons = (userProfile.salmons || 0) + 10;
+        const newLevel = getLevelInfo(newSalmons).level;
+        try {
+          await setDoc(doc(db, "users", userProfile.uid), {
+            salmons: newSalmons,
+            level: newLevel,
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          setUserProfile({ ...userProfile, salmons: newSalmons, level: newLevel });
+        } catch (err) { console.error(err); }
+      }
+
+      setTimeout(() => {
+        setIsProcessing(false);
+        setCatFaceStatus("idle");
+        setFishingResult(null);
+        initFishingGame();
+      }, 1500);
+    } else {
+      setChefReaction("눈은 장식이냥?! 상한 생선을 잡으면 어떡하냥!");
+      speakTTS("눈은 장식이냥?! 상한 생선을 잡으면 어떡하냥!");
+      setTimeout(() => {
+        setIsProcessing(false);
+        setCatFaceStatus("idle");
+        setFishingResult(null);
+      }, 1500);
+    }
+  };
   const getChosung = (str: string) => {
     const cho = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
     let result = '';
@@ -309,6 +426,24 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const unsubGlobal = onSnapshot(doc(db, "global_quests", "community"), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const dishes = data.total_dishes || 0;
+        setGlobalDishes(dishes);
+        
+        // Modal trigger logic
+        if (dishes >= GLOBAL_QUEST_TARGET && !userProfile?.globalBonusReceived && user) {
+          setShowGlobalQuestModal(true);
+        }
+      }
+    }, (error) => {
+      console.error("Global quest snapshot error:", error);
+    });
+    return () => unsubGlobal();
+  }, [user, userProfile?.globalBonusReceived, GLOBAL_QUEST_TARGET]);
+
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
@@ -320,35 +455,6 @@ export default function App() {
   const handleLogout = () => {
     signOut(auth);
   };
-
-  const initSecretRecipe = useCallback(() => {
-    if (collocations.length === 0) return;
-    const byCat = collocations.reduce((acc, curr) => {
-      acc[curr.category] = acc[curr.category] || [];
-      acc[curr.category].push(curr);
-      return acc;
-    }, {} as Record<string, CollocationType[]>);
-    
-    const validCats = Object.keys(byCat).filter(k => byCat[k].length >= 5);
-    const selectedCat = validCats[Math.floor(Math.random() * validCats.length)] || Object.keys(byCat)[0];
-    const pool = validCats.length > 0 ? byCat[selectedCat] : collocations;
-    
-    // shuffle array
-    const shuffled = [...pool].sort(() => 0.5 - Math.random());
-    setSecretProblems(shuffled.slice(0, 5));
-    setSecretAnswers(['', '', '', '', '']);
-    setSecretWrongIndices([]);
-    setHasFailedSecretOnce(false);
-    setShowSecretModal(false);
-  }, [collocations]);
-
-  useEffect(() => {
-    if (activeTab === 'secretRecipe' && secretProblems.length === 0) {
-      initSecretRecipe();
-      const msg = "비법 레시피를 복원해 보라냥! 5개 모두 맞혀야 한다냥!";
-      setChefReaction(msg);
-    }
-  }, [activeTab, secretProblems.length, initSecretRecipe]);
 
   const handleSecretSubmit = async () => {
     const wrongIdxs = secretProblems
@@ -453,6 +559,12 @@ export default function App() {
           setDoc(doc(db, "users", userProfile.uid), updates, { merge: true })
             .catch(e => console.error("Failed to update profile", e));
           setUserProfile({ ...userProfile, ...updates } as UserProfile);
+
+          // Update global quest
+          setDoc(doc(db, "global_quests", "community"), {
+            total_dishes: increment(1)
+          }, { merge: true }).catch(e => console.error("Failed to increment global counter", e));
+
         } catch (e) {
           console.error("Failed to update profile", e);
         }
@@ -709,6 +821,25 @@ export default function App() {
     setCurrentIndex(0);
   }
 
+  const handleClaimGlobalBonus = async () => {
+    if (!userProfile) return;
+    try {
+      const updates = {
+        salmons: (userProfile.salmons || 0) + 1000,
+        globalBonusReceived: true,
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, "users", userProfile.uid), updates, { merge: true });
+      setUserProfile({ ...userProfile, salmons: updates.salmons, globalBonusReceived: true });
+      setShowGlobalQuestModal(false);
+      
+      const newLevelInfo = getLevelInfo(updates.salmons);
+      alert(`보너스 1,000 연어가 지급되었다냥! 현재 연어: ${updates.salmons}개\n레벨: ${newLevelInfo.title}`);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const { title: userLevelTitle, icon: userLevelIcon } = getLevelInfo(
     userProfile?.salmons || 0,
   );
@@ -725,22 +856,22 @@ export default function App() {
             🍥
           </div>
           <div>
-            <h1 className="text-2xl md:text-3xl font-yangjin text-black drop-shadow-sm tracking-wide">
+            <h1 className="text-2xl md:text-3xl font-yangjin text-black drop-shadow-sm tracking-wide leading-none mb-1">
               냥식당
             </h1>
-            <div className="text-sm font-black bg-[#f0f0f0] kitsch-border-sm px-2 py-0.5 inline-block -rotate-2">
+            <div className="text-sm font-black bg-[#f0f0f0] kitsch-border-sm px-2 py-0.5 inline-block -rotate-2 w-max mt-1">
               {userLevelIcon} {userLevelTitle}
             </div>
           </div>
         </div>
         <div className="flex space-x-3 md:space-x-4 mt-2 items-center">
-          <div className="flex items-center space-x-2 bg-white px-3 py-2 kitsch-border-sm font-yangjin text-lg">
+          <div className="flex items-center space-x-2 bg-white px-3 py-2 kitsch-border-sm font-yangjin text-lg shrink-0">
             <span>🐟</span>
             <span>x {userProfile?.salmons || 0}</span>
           </div>
           <button
             onClick={handleLogout}
-            className="kitsch-button-sm w-12 h-12 bg-[#f0f0f0] text-black kitsch-border-sm flex items-center justify-center hover:bg-[#f0f0f0]"
+            className="kitsch-button-sm w-12 h-12 bg-[#f0f0f0] text-black kitsch-border-sm flex items-center justify-center hover:bg-[#e0e0e0] shrink-0"
           >
             <LogOut className="w-6 h-6" />
           </button>
@@ -748,10 +879,43 @@ export default function App() {
       </nav>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col relative mt-2  mb-10">
+      <div className="flex-1 flex flex-col relative mt-2 mb-10">
         {activeTab === "kitchen" && (
           <main className="flex-1 flex flex-col items-center justify-start  overflow-x-hidden px-4 pb-48 w-full z-10 space-y-6 pt-4  relative">
             <div className="absolute top-0 w-full h-8 bg-gradient-to-b from-[var(--color-kitsch-pink)] to-transparent opacity-20" />
+            
+            {/* Global Quest Progress Bar */}
+            <div className="w-full max-w-[750px] bg-white kitsch-border-sm p-4 relative flex flex-col gap-2 shadow-sm">
+              <div className="flex justify-between items-end">
+                <span className="font-yangjin text-[var(--color-kitsch-pink)] flex items-center gap-2">
+                  <span className="text-xl">🌟</span> 커뮤니티 누적 완성 요리
+                </span>
+                <span className="font-yangjin text-sm text-gray-500">
+                  {globalDishes.toLocaleString()} / {GLOBAL_QUEST_TARGET.toLocaleString()}
+                </span>
+              </div>
+              <div className="w-full h-6 bg-[#f0f0f0] rounded-full kitsch-border-sm relative overflow-visible">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-[var(--color-kitsch-pink)] to-[#FFA07A] relative"
+                  style={{ borderRadius: 'inherit' }}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min((globalDishes / GLOBAL_QUEST_TARGET) * 100, 100)}%` }}
+                  transition={{ duration: 1, ease: "easeOut" }}
+                />
+                <motion.div
+                  className="absolute top-1/2 -translate-y-1/2 z-10"
+                  initial={{ left: 0 }}
+                  animate={{ left: `${Math.min((globalDishes / GLOBAL_QUEST_TARGET) * 100, 100)}%` }}
+                  transition={{ duration: 1, ease: "easeOut" }}
+                  style={{ x: "-50%" }}
+                >
+                  <div className="bg-white px-2 py-0.5 rounded-full shadow-md border-2 border-[#FFA07A] text-[var(--color-kitsch-pink)] text-xs font-black font-yangjin whitespace-nowrap">
+                    {Math.min(Math.floor((globalDishes / GLOBAL_QUEST_TARGET) * 100), 100)}%
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+
             {currentProblem ? (
               <>
                 {/* Kitchen Workspace Container */}
@@ -878,6 +1042,162 @@ export default function App() {
                 <Loader2 className="w-12 h-12 text-black animate-spin" />
               </div>
             )}
+          </main>
+        )}
+
+        {activeTab === "fishing" && (
+          <main className="flex-1 flex flex-col items-center justify-start overflow-hidden w-full z-10 relative bg-[#66C2D6]">
+            {/* The Actual Graphic Pond */}
+            <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-40 mix-blend-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <pattern id="ripple-pattern" width="20" height="20" patternUnits="userSpaceOnUse" patternTransform="scale(2)">
+                  <path d="M 0 10 Q 5 5 10 10 T 20 10" fill="none" stroke="white" strokeWidth="0.5" strokeLinecap="round" />
+                  <path d="M -10 20 Q -5 15 0 20 T 10 20" fill="none" stroke="white" strokeWidth="0.5" strokeLinecap="round" />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#ripple-pattern)">
+                <animate attributeName="opacity" values="0.3;0.6;0.3" dur="5s" repeatCount="indefinite" />
+              </rect>
+            </svg>
+            
+            {/* Some Lily Pads */}
+            <svg className="absolute top-1/4 left-10 w-24 h-24 opacity-80 pointer-events-none" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <path d="M50,50 L20,10 A40,40 0 1,0 80,10 Z" fill="#4CAF50" stroke="#2E7D32" strokeWidth="3" strokeLinejoin="round"/>
+            </svg>
+            <svg className="absolute bottom-1/4 right-5 w-32 h-32 opacity-80 pointer-events-none -rotate-45" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <path d="M50,50 L20,10 A40,40 0 1,0 80,10 Z" fill="#66BB6A" stroke="#2E7D32" strokeWidth="3" strokeLinejoin="round"/>
+              <path d="M50,50 L20,20 A30,30 0 1,0 80,20 Z" fill="#81C784" />
+            </svg>
+            
+            {/* Today's Order (Wooden Board) */}
+            <motion.div 
+              initial={{ y: -100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ type: "spring", bounce: 0.5 }}
+              className="mt-6 z-20 flex flex-col items-center gap-4"
+            >
+              <div className="bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] bg-[#795548] px-8 py-5 kitsch-border rounded-lg shadow-2xl min-w-[280px] md:min-w-[340px] border-4 border-[#3E2723] overflow-hidden relative flex flex-col items-center justify-center">
+                <div className="absolute top-0 bottom-0 left-0 right-0 pointer-events-none bg-black opacity-10"></div>
+                {/* Nails */}
+                <div className="absolute top-3 left-6 w-3 h-3 bg-[#A1887F] rounded-full border border-[#4E342E] shadow-inner" />
+                <div className="absolute top-3 right-6 w-3 h-3 bg-[#A1887F] rounded-full border border-[#4E342E] shadow-inner" />
+                <div className="absolute bottom-3 left-6 w-3 h-3 bg-[#A1887F] rounded-full border border-[#4E342E] shadow-inner" />
+                <div className="absolute bottom-3 right-6 w-3 h-3 bg-[#A1887F] rounded-full border border-[#4E342E] shadow-inner" />
+                
+                <div className="text-[#FFF3E0] flex items-center justify-center font-yangjin text-base md:text-lg mb-2 text-center mt-1 relative z-10 bg-[#4E342E]/60 border border-[#3E2723] px-5 py-1 rounded-full shadow-sm tracking-widest leading-none">오늘의 주문서</div>
+                <div className="flex flex-col items-center justify-center gap-3 py-2 relative z-10">
+                  <span 
+                    className="text-4xl md:text-5xl text-white font-yangjin drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] tracking-wide text-center"
+                  >
+                    {fishingProblem ? fishingProblem.baseWord : "주문 확인 중..."}
+                  </span>
+                  <div className="w-16 h-8 md:w-20 md:h-10 opacity-50 animate-pulse">
+                    <svg viewBox="0 0 120 60" className="w-full h-full fill-black" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M 35 30 L 0 5 L 8 30 L 0 55 Z" />
+                      <path d="M 25 30 Q 50 0 110 30 Q 50 60 25 30 Z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Pond Area */}
+            <div className="flex-1 w-full relative mt-4 cursor-[url('https://cdn-icons-png.flaticon.com/32/3063/3063852.png'),_auto]">
+              <AnimatePresence>
+                {fishes.map((fish) => {
+                  const isCaught = fishingResult?.fishId === fish.id;
+                  const isOther = fishingResult && !isCaught;
+                  return (
+                    <motion.div
+                      key={`${fishingProblem?.id}-${fish.id}`}
+                      initial={{ left: `${fish.x}%`, top: `${fish.y}%`, opacity: 0, scale: 0, x: "-50%", y: "-50%" }}
+                      animate={isCaught ? {
+                        opacity: 0, scale: 0, x: "-50%", y: "-50%" 
+                      } : isOther ? {
+                        opacity: 0, scale: 0, x: "-50%", y: "-50%"
+                      } : { 
+                        left: [`${fish.x}%`, `${(fish.x + 20) % 80 + 10}%`, `${(fish.x - 10 + 100) % 80 + 10}%`, `${fish.x}%`],
+                        top: [`${fish.y}%`, `${(fish.y - 15 + 100) % 70 + 10}%`, `${(fish.y + 25) % 70 + 10}%`, `${fish.y}%`],
+                        rotate: [fish.angle, fish.angle + 20, fish.angle - 20, fish.angle],
+                        opacity: 1,
+                        scale: 1,
+                        x: "-50%",
+                        y: "-50%"
+                      }}
+                      transition={isCaught || isOther ? { duration: 0.3 } : {
+                        duration: 15 + Math.random() * 10,
+                        repeat: Infinity,
+                        ease: "linear"
+                      }}
+                      whileHover={isCaught || isOther ? {} : { scale: 1.15, transition: { duration: 0.2 } }}
+                      whileTap={isCaught || isOther ? {} : { scale: 0.9 }}
+                      onClick={(e) => handleFishClick(fish, e)}
+                      className={`absolute group select-none ${isCaught ? '' : "cursor-[url('https://cdn-icons-png.flaticon.com/32/3063/3063852.png'),_auto] p-4"}`}
+                      style={{ position: 'absolute' }}
+                    >
+                    {/* SVG Graphic Salmon Card */}
+                    <div className="relative w-36 h-20 flex items-center justify-center transition-transform hover:drop-shadow-[0_0_10px_rgba(255,255,255,0.8)] filter drop-shadow hover:brightness-110 object-contain">
+                      <svg viewBox="0 0 120 60" className="absolute inset-0 w-full h-full drop-shadow-md z-0 pointer-events-none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M 35 30 L 0 5 L 8 30 L 0 55 Z" fill="#D84315" />
+                        <path d="M 30 30 L 0 10 Q 15 30 0 50 Z" fill="#FF8A65" stroke="#BF360C" strokeWidth="2" strokeLinejoin="round" />
+                        <path d="M 50 45 Q 65 65 75 42" fill="#FF8A65" stroke="#BF360C" strokeWidth="2" strokeLinecap="round" />
+                        <path d="M 50 15 Q 65 -5 80 18" fill="#FF8A65" stroke="#BF360C" strokeWidth="2" strokeLinecap="round" />
+                        <path d="M 25 30 Q 50 0 110 30 Q 50 60 25 30 Z" fill="#FFAB91" stroke="#BF360C" strokeWidth="2.5" />
+                        <path d="M 90 15 Q 85 30 90 45" fill="none" stroke="#D84315" strokeWidth="1.5" strokeLinecap="round" />
+                        <circle cx="95" cy="23" r="3.5" fill="#3E2723" />
+                        <circle cx="96" cy="22" r="1" fill="#FFFFFF" />
+                        <path d="M 103 32 Q 107 33 110 30" fill="none" stroke="#3E2723" strokeWidth="1" strokeLinecap="round" />
+                      </svg>
+                      {/* Fish Text */}
+                      <span className="font-yangjin text-[#4E342E] text-base md:text-lg z-10 break-keep text-center ml-2 relative top-0.5 max-w-[80px] leading-tight pointer-events-none">
+                        {fish.word}
+                      </span>
+                    </div>
+                    {/* Bubbles */}
+                    <motion.div 
+                      animate={{ y: -30, opacity: [0, 1, 0], scale: [0.5, 1.2, 0.5] }}
+                      transition={{ repeat: Infinity, duration: 1.5, delay: Math.random() * 2 }}
+                      className="absolute top-2 right-4 w-2.5 h-2.5 rounded-full border border-blue-100 bg-blue-50/50 pointer-events-none"
+                    />
+                  </motion.div>
+                );
+              })}
+              </AnimatePresence>
+            </div>
+
+            {/* Instant Feedback Overlay */}
+            <AnimatePresence>
+              {fishingResult && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.5, y: 50 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0 }}
+                  className="fixed pointer-events-none flex flex-col items-center justify-center z-50"
+                  style={{ left: fishingResult.clientX - 100, top: fishingResult.clientY - 150 }}
+                >
+                  {fishingResult.isCorrect ? (
+                    <>
+                      <div className="text-8xl drop-shadow-2xl">🍣</div>
+                      <div className="text-2xl md:text-3xl font-yangjin text-white mt-4 bg-green-500/80 px-4 md:px-6 py-2 rounded-full border-4 border-white shadow-xl animate-bounce whitespace-nowrap">
+                        정답이다냥!
+                      </div>
+                      <div className="text-lg md:text-xl font-yangjin text-[#FFD54F] mt-2 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] border border-white bg-black/30 px-3 py-1 rounded-full">
+                        +10 연어
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-8xl drop-shadow-2xl">🦴</div>
+                      <div className="text-2xl md:text-3xl font-yangjin text-white mt-4 bg-red-500/80 px-4 md:px-6 py-2 rounded-full border-4 border-white shadow-xl whitespace-nowrap">
+                        오답이다냥!
+                      </div>
+                    </>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+            
+
           </main>
         )}
 
@@ -1014,19 +1334,20 @@ export default function App() {
             <h2
               className="text-4xl font-yangjin mb-8 text-center text-[#8B5A2B] drop-shadow-sm shrink-0"
             >
-              먼지 쌓인 서랍 보관함
+              먼지 쌓인 오답 보관함
             </h2>
-            {!(userProfile?.wrongRecipes?.length > 0) ? (
-              <div className="text-center mt-20 text-2xl font-yangjin bg-[#E6C280] kitsch-border border-[#8B5A2B] shadow-inner p-10 text-[#8B5A2B]">
-                🐾 서랍이 텅 비었어요! 밀린 오답이 하나도 없네요! 🐾
+            <div className="flex flex-col gap-6 w-full max-w-3xl mx-auto p-6 md:p-10 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] bg-[#C19A6B] rounded-2xl border-[16px] border-[#5E3A1A] shadow-[inset_0_20px_50px_rgba(0,0,0,0.4),0_20px_40px_rgba(0,0,0,0.2)] relative min-h-[350px]">
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 w-32 h-6 bg-[#3E2412] rounded-full shadow-[inset_0_-2px_5px_rgba(0,0,0,0.5)] flex justify-center z-10">
+                <div className="w-16 h-3 bg-gradient-to-b from-[#b87333] to-[#8a5322] rounded-full mt-1 shadow-sm"></div>
               </div>
-            ) : (
-              <div className="flex flex-col gap-6 w-full max-w-3xl mx-auto p-6 md:p-10 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] bg-[#C19A6B] rounded-2xl border-[16px] border-[#5E3A1A] shadow-[inset_0_20px_50px_rgba(0,0,0,0.4),0_20px_40px_rgba(0,0,0,0.2)] relative">
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 w-32 h-6 bg-[#3E2412] rounded-full shadow-[inset_0_-2px_5px_rgba(0,0,0,0.5)] flex justify-center">
-                  <div className="w-16 h-3 bg-gradient-to-b from-[#b87333] to-[#8a5322] rounded-full mt-1 shadow-sm"></div>
+              <div className="mt-8 flex flex-col gap-6 z-0 h-full">
+              {!(userProfile?.wrongRecipes?.length > 0) ? (
+                <div className="text-center mt-12 text-2xl font-yangjin text-[#5E3A1A] flex flex-col items-center justify-center h-full drop-shadow-[0_1px_1px_rgba(255,255,255,0.4)]">
+                  <span className="text-6xl mb-4 opacity-80 mix-blend-multiply">🕷️</span>
+                  <p>서랍이 텅 비었어요!<br />먼지만 굴러다니네요...</p>
                 </div>
-                <div className="mt-6 flex flex-col gap-6">
-                {(userProfile?.wrongRecipes || []).map((id) => {
+              ) : (
+                (userProfile?.wrongRecipes || []).map((id) => {
                   const col = collocations.find(
                     (c) => String(c.id) === String(id),
                   );
@@ -1064,10 +1385,10 @@ export default function App() {
                       </button>
                     </div>
                   );
-                })}
-                </div>
+                })
+              )}
               </div>
-            )}
+            </div>
           </main>
         )}
 
@@ -1431,12 +1752,12 @@ export default function App() {
 
         {/* Floating Chatbot (Small, corner placed) */}
         <AnimatePresence>
-          {(activeTab === "kitchen" || activeTab === "secretRecipe") && (
+          {(activeTab === "kitchen" || activeTab === "secretRecipe" || activeTab === "fishing") && (
             <motion.section
               initial={{ x: 150, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: 150, opacity: 0 }}
-              className="fixed bottom-28 right-4 md:right-8 flex flex-col items-end pointer-events-none z-40 max-w-[280px] md:max-w-[320px]"
+              className="fixed bottom-[110px] md:bottom-[130px] right-4 md:right-8 flex flex-col items-end pointer-events-none z-50 max-w-[280px] md:max-w-[320px]"
             >
               <div className="bg-white kitsch-border p-3 md:p-4 relative pointer-events-auto shadow-xl mb-3 text-sm md:text-base font-bold ">
                 <div className="absolute right-6 -bottom-3 w-0 h-0  border-l-transparent  border-t-black  border-r-transparent hidden md:block"></div>
@@ -1464,12 +1785,13 @@ export default function App() {
         </AnimatePresence>
 
         {/* Bottom Menu Navigation */}
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[95%] max-w-[600px] bg-white/80 backdrop-blur-md kitsch-border flex justify-around p-2 z-50 shadow-xl overflow-x-auto">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[95%] max-w-[700px] bg-white/80 backdrop-blur-md kitsch-border flex justify-around p-2 z-50 shadow-xl overflow-x-auto">
           {[
+            { id: "fishing", icon: <Fish size={20} />, label: "낚시터" },
             { id: "kitchen", icon: <Utensils size={20} />, label: "주방" },
             { id: "secretRecipe", icon: <ScrollText size={20} />, label: "비법" },
             { id: "encyclopedia", icon: <BookOpen size={20} />, label: "신선고" },
-            { id: "wrong", icon: <XCircle size={20} />, label: "오답" },
+            { id: "wrong", icon: <XCircle size={20} />, label: "보관함" },
             { id: "lounge", icon: <Home size={20} />, label: "라운지" },
             { id: "profile", icon: <User size={20} />, label: "내 정보" },
           ].map((tab) => (
@@ -1508,6 +1830,37 @@ export default function App() {
           ))}
         </div>
       </div>
+      
+      {/* Global Quest Modal */}
+      <AnimatePresence>
+        {showGlobalQuestModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <Confetti width={typeof window !== 'undefined' ? window.innerWidth : 800} height={typeof window !== 'undefined' ? window.innerHeight : 600} recycle={false} numberOfPieces={500} />
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-4 border-[var(--color-kitsch-pink)] flex flex-col items-center text-center relative"
+            >
+              <div className="absolute -top-12 text-6xl drop-shadow-xl animate-bounce">😼</div>
+              <h2 className="font-yangjin text-3xl mb-4 mt-6 text-[var(--color-kitsch-pink)]">
+                경축! 10,000그릇 달성!
+              </h2>
+              <div className="bg-[#f0f0f0] p-4 rounded-xl kitsch-border-sm mb-6">
+                <p className="font-body text-gray-800 break-keep leading-relaxed">
+                  "너희들... 제법이다냥! 수습 셰프들이 모이니 제법 쓸만한 만찬이 완성됐다냥! 오늘만 특별히 보너스를 주겠다냥!"
+                </p>
+              </div>
+              <button
+                onClick={handleClaimGlobalBonus}
+                className="w-full kitsch-button bg-[#FFD700] text-black text-xl py-3 rounded-xl border-2 border-black font-yangjin shadow-md hover:bg-[#FFE55C]"
+              >
+                연어 1,000개 받기
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       </div>
     </>
   );
